@@ -4,6 +4,7 @@ import tempfile
 import os
 import logging
 from typing import Optional
+import pathlib
 
 logger = logging.getLogger(__name__)
 
@@ -11,27 +12,42 @@ DEFAULT_MMDC_THEME = "default"
 
 async def render_mermaid_to_file(
     code: str,
-    output_path: str, # Full path for the output image (e.g., /path/to/diagram.png)
+    output_dir: str,
+    name: str,
     theme: Optional[str] = None,
-    backgroundColor: Optional[str] = None,
-    # width: Optional[int] = None, # Not included in mcp_mermaid_generate spec
-    # height: Optional[int] = None, # Not included in mcp_mermaid_generate spec
-) -> None:
+    background_color: Optional[str] = None,
+) -> str:
     """
     Renders Mermaid code to an image file using the @mermaid-js/mermaid-cli (mmdc).
 
     Args:
         code: The Mermaid diagram code string.
-        output_path: The full path where the generated image should be saved.
+        output_dir: Directory where the generated image should be saved.
+        name: Name for the output file (will be appended with .png if not included).
         theme: The Mermaid theme to use (e.g., "default", "forest", "dark", "neutral").
-        backgroundColor: Background color for the diagram (e.g., "white", "transparent", "#F0F0F0").
-        # width: Optional width for the diagram.
-        # height: Optional height for the diagram.
+        background_color: Background color for the diagram (e.g., "white", "transparent", "#F0F0F0").
+
+    Returns:
+        str: The absolute path to the generated image file.
 
     Raises:
         ValueError: If mmdc fails to generate the diagram.
         FileNotFoundError: If mmdc command is not found.
     """
+    # Ensure output directory exists
+    output_dir = os.path.abspath(output_dir)
+    if not os.path.exists(output_dir):
+        raise ValueError(f"Output directory does not exist: {output_dir}")
+    if not os.path.isdir(output_dir):
+        raise ValueError(f"Output path is not a directory: {output_dir}")
+
+    # Ensure name has .png extension
+    if not name.lower().endswith('.png'):
+        name = f"{name}.png"
+
+    # Construct full output path
+    output_path = os.path.join(output_dir, name)
+
     # Use provided theme or default
     current_theme = theme if theme else DEFAULT_MMDC_THEME
 
@@ -45,18 +61,10 @@ async def render_mermaid_to_file(
         "-i", tmp_input_file_path,
         "-o", output_path,
         "-t", current_theme,
-        # -w width (if specified and not None)
-        # -H height (if specified and not None)
     ]
 
-    if backgroundColor:
-        cmd.extend(["-b", backgroundColor])
-    
-    # Add width and height if they were part of the function signature and provided
-    # if width:
-    #     cmd.extend(["-w", str(width)])
-    # if height:
-    #     cmd.extend(["-H", str(height)])
+    if background_color:
+        cmd.extend(["-b", background_color])
 
     logger.debug(f"Executing mmdc command: {' '.join(cmd)}")
 
@@ -88,4 +96,6 @@ async def render_mermaid_to_file(
     finally:
         if os.path.exists(tmp_input_file_path):
             os.remove(tmp_input_file_path)
-            logger.debug(f"Removed temporary Mermaid input file: {tmp_input_file_path}") 
+            logger.debug(f"Removed temporary Mermaid input file: {tmp_input_file_path}")
+
+    return output_path 

@@ -4,16 +4,13 @@ import sys
 import os
 import asyncio
 import click
+import base64
 from typing import Optional
 import tempfile
 import pathlib
 import logging
-import base64
 
 # Add project root to sys.path
-# __file__ is mcp_mermaid_image_gen/server/app.py
-# os.path.dirname(__file__) is mcp_mermaid_image_gen/server
-# os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')) is /Users/timkitchens/projects/ai-projects/mcp_mermaid_image_gen
 PROJECT_ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 if PROJECT_ROOT_DIR not in sys.path:
     sys.path.insert(0, PROJECT_ROOT_DIR)
@@ -27,113 +24,183 @@ from mcp_mermaid_image_gen.logging_config import setup_logging, logger
 from mcp_mermaid_image_gen.tools.mermaid_renderer import render_mermaid_to_file
 
 
-def register_tools(mcp_server: FastMCP) -> None:
-    """Register MCP tools with the server"""
-    module_logger = logger
-
-    @mcp_server.tool(
-        name="generate_mermaid_diagram_file",
-        description="Generates a Mermaid diagram from code and saves it to a specified file path (folder + name)."
-    )
-    async def mermaid_stdio_tool_logic(
-        code: str, 
-        folder: str,  # Absolute path to the folder
-        name: str,    # Filename (e.g., "diagram.png")
-        theme: Optional[str] = None,
-        backgroundColor: Optional[str] = None
-    ) -> str: 
-        tool_logger = logging.getLogger(f"{__name__}.mermaid_stdio_tool")
-        tool_logger.info(f"generate_mermaid_diagram_file called. Folder: {folder}, Name: {name}")
-        output_path = pathlib.Path(folder) / name
-        
-        try:
-            await render_mermaid_to_file(
-                code,
-                str(output_path.resolve()),
-                theme=theme,
-                backgroundColor=backgroundColor
-            )
-            tool_logger.info(f"Mermaid diagram saved to: {output_path.resolve()}")
-            return str(output_path.resolve())
-        except FileNotFoundError: 
-            tool_logger.error("mmdc command not found. Cannot generate diagram.")
-            raise ValueError("mmdc command not found. Ensure @mermaid-js/mermaid-cli is installed globally.")
-        except ValueError as e: 
-            tool_logger.error(f"Error generating diagram for file: {e}")
-            raise
-        except Exception as e:
-            tool_logger.error(f"Unexpected error in generate_mermaid_diagram_file: {e}", exc_info=True)
-            raise ValueError(f"An unexpected error occurred in file diagram generation: {e}")
-
-    @mcp_server.tool(
-        name="generate_mermaid_diagram_stream",
-        description="Generates a Mermaid diagram from code and streams it back as an image."
-    )
-    async def mermaid_sse_tool_logic(
-        code: str, 
-        theme: Optional[str] = None,
-        backgroundColor: Optional[str] = None
-    ) -> types.ImageContent:
-        tool_logger = logging.getLogger(f"{__name__}.mermaid_sse_tool")
-        tool_logger.info("generate_mermaid_diagram_stream called.")
-        tmp_output_path = ""
-        try:
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_output_file:
-                tmp_output_path = tmp_output_file.name
-            
-            tool_logger.debug(f"Temporary file for SSE stream: {tmp_output_path}")
-            await render_mermaid_to_file(
-                code,
-                tmp_output_path,
-                theme=theme,
-                backgroundColor=backgroundColor
-            )
-            tool_logger.info(f"Mermaid diagram generated for streaming from: {tmp_output_path}")
-            
-            # Read the image bytes and base64 encode them
-            with open(tmp_output_path, 'rb') as f:
-                image_bytes = f.read()
-                image_b64 = base64.b64encode(image_bytes).decode('utf-8')
-            
-            return types.ImageContent(
-                type="image",
-                data=image_b64,
-                mimeType="image/png"
-            )
-        except FileNotFoundError: 
-            tool_logger.error("mmdc command not found. Cannot generate diagram.")
-            raise ValueError("mmdc command not found. Ensure @mermaid-js/mermaid-cli is installed globally.")
-        except ValueError as e: 
-            tool_logger.error(f"Error generating diagram for stream: {e}")
-            raise
-        except Exception as e:
-            tool_logger.error(f"Unexpected error in generate_mermaid_diagram_stream: {e}", exc_info=True)
-            raise ValueError(f"An unexpected error occurred in stream diagram generation: {e}")
-        finally:
-            if tmp_output_path and os.path.exists(tmp_output_path):
-                os.remove(tmp_output_path)
-                tool_logger.debug(f"Removed temporary SSE image file: {tmp_output_path}")
-
-    module_logger.info("All Mermaid tools registered.")
-
-
 def create_mcp_server(config: Optional[ServerConfig] = None) -> FastMCP:
     """Create and configure the MCP server instance"""
     if config is None:
         config = load_config()
-    
-    setup_logging(config)
-    module_logger = logger
 
-    module_logger.info(f"Initializing MCP Server with name: {config.name}")
-    server = FastMCP(config.name)
+    server = FastMCP(name=config.name)
     
     # Register tools
     register_tools(server)
-    module_logger.info("Tool registration complete.")
-    module_logger.info("MCP server instance created.")
-
+    
     return server
+
+
+def register_tools(mcp_server: FastMCP) -> None:
+    """Register all MCP tools with the server."""
+    
+    @mcp_server.tool(
+        name="generate_mermaid_diagram_file",
+        description="""Generate a Mermaid diagram and save it to a local file system directory.
+
+SYSTEM PREREQUISITES:
+- Node.js must be installed (v14 or higher)
+- Mermaid CLI must be installed globally: npm install -g @mermaid-js/mermaid-cli
+- The 'mmdc' command must be available in the system PATH
+- Python 3.8 or higher with MCP tools installed
+
+IMPORTANT TRANSPORT & ACCESS REQUIREMENTS:
+- Works with both STDIO and SSE transport modes
+- REQUIRES: The MCP client (e.g., AI assistant) must have access to the local file system where the image is saved
+- The client must have write permissions for the specified folder
+
+PARAMETER GUIDANCE:
+- code: Valid Mermaid diagram syntax (see https://mermaid.js.org/)
+- folder: Absolute or relative path to an existing directory with write permissions
+- name: Filename for the diagram (will be appended with .png if not included)
+- theme: Optional theme name. Supported themes:
+  - default: Default theme for all diagrams
+  - neutral: Great for black and white documents that will be printed
+  - dark: Works well with dark-colored elements or dark-mode
+  - forest: Contains shades of green
+  - base: The only theme that can be modified for customization
+- backgroundColor: Optional hex color code (e.g., '#FFFFFF') or color name (e.g., 'white', 'transparent')
+
+RESPONSE:
+- Returns the absolute path to the generated PNG file
+- The client must be able to access this path to use the generated image
+
+USE CASE:
+Best suited for scenarios where:
+1. The client needs to persist the diagram to disk
+2. The client has local file system access
+3. The client needs to reference the image file path in subsequent operations"""
+    )
+    async def generate_mermaid_diagram_file(
+        code: str,
+        folder: str,
+        name: str,
+        theme: str = None,
+        backgroundColor: str = None
+    ) -> types.TextContent:
+        """
+        Generate a Mermaid diagram and save it to a file.
+        
+        Args:
+            code (str): The Mermaid diagram code (must be valid Mermaid syntax)
+            folder (str): The folder where to save the diagram (must exist and be writable)
+            name (str): The name for the diagram file (will be appended with .png if not included)
+            theme (str): Theme name (default, neutral, dark, forest, or base)
+            backgroundColor (str): Background color for the diagram (hex code or color name), defaults to None
+            
+        Returns:
+            TextContent: The absolute path where the file was saved
+            
+        Raises:
+            ValueError: If the folder doesn't exist or isn't writable
+            ValueError: If the Mermaid CLI (mmdc) is not installed
+            ValueError: If the Mermaid syntax is invalid
+        """
+        try:
+            output_path = await render_mermaid_to_file(
+                code=code,
+                output_dir=folder,
+                name=name,
+                theme=theme,
+                background_color=backgroundColor
+            )
+            return types.TextContent(type="text", text=str(output_path))
+        except Exception as e:
+            logger.error(f"Error generating Mermaid diagram: {e}")
+            return types.TextContent(type="text", text=f"Error: {str(e)}")
+
+    @mcp_server.tool(
+        name="generate_mermaid_diagram_stream",
+        description="""Generate a Mermaid diagram and return it directly as a base64-encoded PNG image stream.
+
+SYSTEM PREREQUISITES:
+- Node.js must be installed (v14 or higher)
+- Mermaid CLI must be installed globally: npm install -g @mermaid-js/mermaid-cli
+- The 'mmdc' command must be available in the system PATH
+- Python 3.8 or higher with MCP tools installed
+- MCP client must support SSE transport and binary/base64 image handling
+
+IMPORTANT TRANSPORT REQUIREMENTS:
+- REQUIRES SSE TRANSPORT MODE ONLY
+- Will NOT work with STDIO transport
+- DO NOT use this endpoint if your MCP client doesn't support SSE transport
+- DO NOT use this endpoint if your client can't handle binary/base64 image data
+
+PARAMETER GUIDANCE:
+- code: Valid Mermaid diagram syntax (see https://mermaid.js.org/)
+- theme: Optional theme name. Supported themes:
+  - default: Default theme for all diagrams
+  - neutral: Great for black and white documents that will be printed
+  - dark: Works well with dark-colored elements or dark-mode
+  - forest: Contains shades of green
+  - base: The only theme that can be modified for customization
+- backgroundColor: Optional hex color code (e.g., '#FFFFFF') or color name (e.g., 'white', 'transparent')
+
+RESPONSE:
+- Returns the diagram as a base64-encoded PNG image
+- No file system access or permissions required
+- Image data is streamed directly back to the client
+
+USE CASE:
+Best suited for scenarios where:
+1. The client is using SSE transport mode
+2. The client can handle base64-encoded image data
+3. No need to persist the image to disk
+4. No file system access is available or desired"""
+    )
+    async def generate_mermaid_diagram_stream(
+        code: str,
+        theme: str = None,
+        backgroundColor: str = None
+    ) -> types.ImageContent:
+        """
+        Generate a Mermaid diagram and return it as an image stream.
+        
+        Args:
+            code (str): The Mermaid diagram code (must be valid Mermaid syntax)
+            theme (str): Theme name (default, neutral, dark, forest, or base)
+            backgroundColor (str): Background color for the diagram (hex code or color name), defaults to None
+            
+        Returns:
+            ImageContent: The generated diagram as a base64-encoded PNG image
+            
+        Raises:
+            ValueError: If the Mermaid CLI (mmdc) is not installed
+            ValueError: If the Mermaid syntax is invalid
+            RuntimeError: If used with non-SSE transport
+        """
+        try:
+            # Create a temporary directory for the output
+            with tempfile.TemporaryDirectory() as temp_dir:
+                output_path = await render_mermaid_to_file(
+                    code=code,
+                    output_dir=temp_dir,
+                    name="temp",
+                    theme=theme,
+                    background_color=backgroundColor
+                )
+                
+                # Read the generated image
+                with open(output_path, "rb") as f:
+                    image_bytes = f.read()
+                
+                # Convert to base64
+                image_b64 = base64.b64encode(image_bytes).decode()
+                
+                return types.ImageContent(
+                    type="image",
+                    data=image_b64,
+                    mimeType="image/png"
+                )
+        except Exception as e:
+            logger.error(f"Error generating Mermaid diagram: {e}")
+            raise
 
 
 # Create server instance that can be imported by MCP CLI
@@ -146,29 +213,28 @@ server = create_mcp_server()
     "--transport",
     type=click.Choice(["stdio", "sse"]),
     default="stdio",
-    help="Transport type (stdio or sse)",
+    help="Transport type (stdio or sse)"
 )
 def main(port: int, transport: str) -> int:
     """Run the server with specified transport."""
-    cli_logger = logger
-    cli_logger.info(f"main() called with transport: {transport}, port: {port if transport == 'sse' else 'N/A'}")
-
     try:
-        # Use the global server instance
+        # Create server with any command line overrides
+        config = load_config()
+        
+        global server
+        server = create_mcp_server(config)
+
         if transport == "stdio":
-            cli_logger.info("Running server in stdio mode.")
             asyncio.run(server.run_stdio_async())
         else:
             server.settings.port = port
-            cli_logger.info(f"Running server in sse mode on port {port}.")
             asyncio.run(server.run_sse_async())
-        cli_logger.info("Server finished running.")
         return 0
     except KeyboardInterrupt:
-        cli_logger.info("Server stopped by user.")
+        logger.info("Server stopped by user")
         return 0
     except Exception as e:
-        cli_logger.error(f"Failed to start server: {e}", exc_info=True)
+        logger.error(f"Failed to start server: {e}", exc_info=True)
         return 1
 
 
