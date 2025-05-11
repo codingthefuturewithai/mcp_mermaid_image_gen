@@ -1,10 +1,13 @@
-"""MCP server implementation with Echo tool"""
+"""MCP server implementation for Mermaid diagram generation"""
 
 import sys
 import os
 import asyncio
 import click
 from typing import Optional
+import tempfile
+import pathlib
+import logging
 
 # Add project root to sys.path
 # __file__ is mcp_mermaid_image_gen/server/app.py
@@ -20,7 +23,87 @@ from mcp.server.fastmcp import FastMCP, Image
 # Use absolute imports now that project root is in sys.path
 from mcp_mermaid_image_gen.config import ServerConfig, load_config
 from mcp_mermaid_image_gen.logging_config import setup_logging, logger
-from mcp_mermaid_image_gen.tools.echo import echo
+from mcp_mermaid_image_gen.tools.mermaid_renderer import render_mermaid_to_file
+
+
+def register_tools(mcp_server: FastMCP) -> None:
+    """Register MCP tools with the server"""
+    module_logger = logger
+
+    @mcp_server.tool(
+        name="generate_mermaid_diagram_file",
+        description="Generates a Mermaid diagram from code and saves it to a specified file path (folder + name)."
+    )
+    async def mermaid_stdio_tool_logic(
+        code: str, 
+        folder: str,  # Absolute path to the folder
+        name: str,    # Filename (e.g., "diagram.png")
+        theme: Optional[str] = None,
+        backgroundColor: Optional[str] = None
+    ) -> str: 
+        tool_logger = logging.getLogger(f"{__name__}.mermaid_stdio_tool")
+        tool_logger.info(f"generate_mermaid_diagram_file called. Folder: {folder}, Name: {name}")
+        output_path = pathlib.Path(folder) / name
+        
+        try:
+            await render_mermaid_to_file(
+                code,
+                str(output_path.resolve()),
+                theme=theme,
+                backgroundColor=backgroundColor
+            )
+            tool_logger.info(f"Mermaid diagram saved to: {output_path.resolve()}")
+            return str(output_path.resolve())
+        except FileNotFoundError: 
+            tool_logger.error("mmdc command not found. Cannot generate diagram.")
+            raise ValueError("mmdc command not found. Ensure @mermaid-js/mermaid-cli is installed globally.")
+        except ValueError as e: 
+            tool_logger.error(f"Error generating diagram for file: {e}")
+            raise
+        except Exception as e:
+            tool_logger.error(f"Unexpected error in generate_mermaid_diagram_file: {e}", exc_info=True)
+            raise ValueError(f"An unexpected error occurred in file diagram generation: {e}")
+
+    @mcp_server.tool(
+        name="generate_mermaid_diagram_stream",
+        description="Generates a Mermaid diagram from code and streams it back as an image."
+    )
+    async def mermaid_sse_tool_logic(
+        code: str, 
+        theme: Optional[str] = None,
+        backgroundColor: Optional[str] = None
+    ) -> Image:
+        tool_logger = logging.getLogger(f"{__name__}.mermaid_sse_tool")
+        tool_logger.info("generate_mermaid_diagram_stream called.")
+        tmp_output_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_output_file:
+                tmp_output_path = tmp_output_file.name
+            
+            tool_logger.debug(f"Temporary file for SSE stream: {tmp_output_path}")
+            await render_mermaid_to_file(
+                code,
+                tmp_output_path,
+                theme=theme,
+                backgroundColor=backgroundColor
+            )
+            tool_logger.info(f"Mermaid diagram generated for streaming from: {tmp_output_path}")
+            return Image.from_file(tmp_output_path)
+        except FileNotFoundError: 
+            tool_logger.error("mmdc command not found. Cannot generate diagram.")
+            raise ValueError("mmdc command not found. Ensure @mermaid-js/mermaid-cli is installed globally.")
+        except ValueError as e: 
+            tool_logger.error(f"Error generating diagram for stream: {e}")
+            raise
+        except Exception as e:
+            tool_logger.error(f"Unexpected error in generate_mermaid_diagram_stream: {e}", exc_info=True)
+            raise ValueError(f"An unexpected error occurred in stream diagram generation: {e}")
+        finally:
+            if tmp_output_path and os.path.exists(tmp_output_path):
+                os.remove(tmp_output_path)
+                tool_logger.debug(f"Removed temporary SSE image file: {tmp_output_path}")
+
+    module_logger.info("All Mermaid tools registered.")
 
 
 def create_mcp_server(config: Optional[ServerConfig] = None) -> FastMCP:
@@ -28,49 +111,22 @@ def create_mcp_server(config: Optional[ServerConfig] = None) -> FastMCP:
     if config is None:
         config = load_config()
     
-    # Set up logging first
-    # Use the imported logger directly if setup_logging configures the root logger
-    # or ensure logger object from logging_config is used correctly.
-    # For now, assuming setup_logging handles global logger config or returns one.
-    setup_logging(config) 
-    
-    # Get a logger instance for this module, assuming setup_logging configured it
-    module_logger = logger # Use the imported logger from logging_config
+    setup_logging(config)
+    module_logger = logger
 
     module_logger.info(f"Initializing MCP Server with name: {config.name}")
     server = FastMCP(config.name)
-
-    # Register all tools with the server
-    module_logger.info("Registering tools...")
+    
+    # Register tools
     register_tools(server)
     module_logger.info("Tool registration complete.")
+    module_logger.info("MCP server instance created.")
 
     return server
 
 
-def register_tools(mcp_server: FastMCP) -> None:
-    """Register all MCP tools with the server"""
-    module_logger = logger # Use the imported logger
-
-    @mcp_server.tool(
-        name="echo",
-        description="Echo back the input text with optional case transformation",
-    )
-    def echo_tool(text: str, transform: Optional[str] = None) -> types.TextContent:
-        """Wrapper around the echo tool implementation"""
-        module_logger.debug(f"Echo tool called with text: '{text}', transform: '{transform}'")
-        result = echo(text, transform)
-        module_logger.debug(f"Echo tool returning: '{result.text}'")
-        return result
-
-
-# Create a server instance that can be imported by the MCP CLI
-# This line should use the module_logger if it's defined by this point,
-# or we ensure logger is configured before this print.
-# For safety, let's assume logger from logging_config is fine.
-logger.info("Creating MCP server instance for module export...")
+# Create server instance that can be imported by MCP CLI
 server = create_mcp_server()
-logger.info("MCP server instance created.")
 
 
 @click.command()
@@ -83,18 +139,16 @@ logger.info("MCP server instance created.")
 )
 def main(port: int, transport: str) -> int:
     """Run the server with specified transport."""
-    # Ensure logger is available here too
-    cli_logger = logger # Use the imported logger
+    cli_logger = logger
+    cli_logger.info(f"main() called with transport: {transport}, port: {port if transport == 'sse' else 'N/A'}")
 
-    cli_logger.info(f"Attempting to start server with transport: {transport}, port: {port if transport == 'sse' else 'N/A'}")
     try:
-        # If server is already created globally, we use that instance.
-        # The 'server' variable created above is the one to use.
+        # Use the global server instance
         if transport == "stdio":
             cli_logger.info("Running server in stdio mode.")
             asyncio.run(server.run_stdio_async())
         else:
-            server.settings.port = port # Configure port for SSE on the global server instance
+            server.settings.port = port
             cli_logger.info(f"Running server in sse mode on port {port}.")
             asyncio.run(server.run_sse_async())
         cli_logger.info("Server finished running.")
@@ -108,9 +162,4 @@ def main(port: int, transport: str) -> int:
 
 
 if __name__ == "__main__":
-    # This is when app.py is run as the main script.
-    # Ensure logger is available.
-    main_logger = logger # Use the imported logger
-    main_logger.info("app.py executed as main script.")
-    # sys.exit(main()) # click commands usually handle sys.exit
-    main()
+    sys.exit(main())
