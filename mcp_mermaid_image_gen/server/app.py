@@ -8,6 +8,7 @@ from typing import Optional
 import tempfile
 import pathlib
 import logging
+import base64
 
 # Add project root to sys.path
 # __file__ is mcp_mermaid_image_gen/server/app.py
@@ -18,7 +19,7 @@ if PROJECT_ROOT_DIR not in sys.path:
     sys.path.insert(0, PROJECT_ROOT_DIR)
 
 from mcp import types
-from mcp.server.fastmcp import FastMCP, Image
+from mcp.server.fastmcp import FastMCP
 
 # Use absolute imports now that project root is in sys.path
 from mcp_mermaid_image_gen.config import ServerConfig, load_config
@@ -72,7 +73,7 @@ def register_tools(mcp_server: FastMCP) -> None:
         code: str, 
         theme: Optional[str] = None,
         backgroundColor: Optional[str] = None
-    ) -> Image:
+    ) -> types.ImageContent:
         tool_logger = logging.getLogger(f"{__name__}.mermaid_sse_tool")
         tool_logger.info("generate_mermaid_diagram_stream called.")
         tmp_output_path = ""
@@ -88,7 +89,17 @@ def register_tools(mcp_server: FastMCP) -> None:
                 backgroundColor=backgroundColor
             )
             tool_logger.info(f"Mermaid diagram generated for streaming from: {tmp_output_path}")
-            return Image.from_file(tmp_output_path)
+            
+            # Read the image bytes and base64 encode them
+            with open(tmp_output_path, 'rb') as f:
+                image_bytes = f.read()
+                image_b64 = base64.b64encode(image_bytes).decode('utf-8')
+            
+            return types.ImageContent(
+                type="image",
+                data=image_b64,
+                mimeType="image/png"
+            )
         except FileNotFoundError: 
             tool_logger.error("mmdc command not found. Cannot generate diagram.")
             raise ValueError("mmdc command not found. Ensure @mermaid-js/mermaid-cli is installed globally.")
