@@ -51,7 +51,7 @@ To configure Claude Desktop, open its `claude_desktop_config.json` file (typical
     "mermaid_image_generator": {
       "command": "uvx",
       "args": [
-        "mcp-mermaid-image-gen-server"
+        "mcp_mermaid_image_gen"
       ]
     }
   }
