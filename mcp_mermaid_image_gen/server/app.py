@@ -58,17 +58,20 @@ IMPORTANT TRANSPORT & ACCESS REQUIREMENTS:
 PARAMETER GUIDANCE:
 - code: Valid Mermaid diagram syntax (see https://mermaid.js.org/)
 - folder: Absolute or relative path to an existing directory with write permissions
-- name: Filename for the diagram (will be appended with .png if not included)
-- theme: Optional theme name. Supported themes:
+- name: Filename for the diagram (extension can determine format if format not specified)
+- theme: Theme name for the diagram. MUST be one of: ["default", "neutral", "dark", "forest", "base"]
   - default: Default theme for all diagrams
   - neutral: Great for black and white documents that will be printed
   - dark: Works well with dark-colored elements or dark-mode
   - forest: Contains shades of green
   - base: The only theme that can be modified for customization
 - backgroundColor: Optional hex color code (e.g., '#FFFFFF') or color name (e.g., 'white', 'transparent')
+- format: Output format. MUST be one of: ["svg", "png", "pdf"]. If not specified:
+  1. Inferred from filename extension if provided (e.g., "diagram.svg" -> svg)
+  2. Defaults to "png" if no valid extension found
 
 RESPONSE:
-- Returns the absolute path to the generated PNG file
+- Returns the absolute path to the generated file
 - The client must be able to access this path to use the generated image
 
 USE CASE:
@@ -82,7 +85,8 @@ Best suited for scenarios where:
         folder: str,
         name: str,
         theme: str = None,
-        backgroundColor: str = None
+        backgroundColor: str = None,
+        format: str = None
     ) -> types.TextContent:
         """
         Generate a Mermaid diagram and save it to a file.
@@ -90,9 +94,10 @@ Best suited for scenarios where:
         Args:
             code (str): The Mermaid diagram code (must be valid Mermaid syntax)
             folder (str): The folder where to save the diagram (must exist and be writable)
-            name (str): The name for the diagram file (will be appended with .png if not included)
+            name (str): The name for the diagram file (extension can determine format)
             theme (str): Theme name (default, neutral, dark, forest, or base)
-            backgroundColor (str): Background color for the diagram (hex code or color name), defaults to None
+            backgroundColor (str): Background color for the diagram (hex code or color name)
+            format (str): Output format (svg, png, or pdf)
             
         Returns:
             TextContent: The absolute path where the file was saved
@@ -101,6 +106,7 @@ Best suited for scenarios where:
             ValueError: If the folder doesn't exist or isn't writable
             ValueError: If the Mermaid CLI (mmdc) is not installed
             ValueError: If the Mermaid syntax is invalid
+            ValueError: If an invalid theme or format is specified
         """
         try:
             output_path = await render_mermaid_to_file(
@@ -108,7 +114,8 @@ Best suited for scenarios where:
                 output_dir=folder,
                 name=name,
                 theme=theme,
-                background_color=backgroundColor
+                background_color=backgroundColor,
+                format=format
             )
             return types.TextContent(type="text", text=str(output_path))
         except Exception as e:
@@ -117,7 +124,7 @@ Best suited for scenarios where:
 
     @mcp_server.tool(
         name="generate_mermaid_diagram_stream",
-        description="""Generate a Mermaid diagram and return it directly as a base64-encoded PNG image stream.
+        description="""Generate a Mermaid diagram and return it directly as a base64-encoded image.
 
 SYSTEM PREREQUISITES:
 - Node.js must be installed (v14 or higher)
@@ -134,16 +141,17 @@ IMPORTANT TRANSPORT REQUIREMENTS:
 
 PARAMETER GUIDANCE:
 - code: Valid Mermaid diagram syntax (see https://mermaid.js.org/)
-- theme: Optional theme name. Supported themes:
+- theme: Theme name for the diagram. MUST be one of: ["default", "neutral", "dark", "forest", "base"]
   - default: Default theme for all diagrams
   - neutral: Great for black and white documents that will be printed
   - dark: Works well with dark-colored elements or dark-mode
   - forest: Contains shades of green
   - base: The only theme that can be modified for customization
 - backgroundColor: Optional hex color code (e.g., '#FFFFFF') or color name (e.g., 'white', 'transparent')
+- format: Output format. MUST be one of: ["svg", "png", "pdf"]. Defaults to "png" if not specified.
 
 RESPONSE:
-- Returns the diagram as a base64-encoded PNG image
+- Returns the diagram as a base64-encoded image in the specified format
 - No file system access or permissions required
 - Image data is streamed directly back to the client
 
@@ -157,7 +165,8 @@ Best suited for scenarios where:
     async def generate_mermaid_diagram_stream(
         code: str,
         theme: str = None,
-        backgroundColor: str = None
+        backgroundColor: str = None,
+        format: str = None
     ) -> types.ImageContent:
         """
         Generate a Mermaid diagram and return it as an image stream.
@@ -165,14 +174,16 @@ Best suited for scenarios where:
         Args:
             code (str): The Mermaid diagram code (must be valid Mermaid syntax)
             theme (str): Theme name (default, neutral, dark, forest, or base)
-            backgroundColor (str): Background color for the diagram (hex code or color name), defaults to None
+            backgroundColor (str): Background color for the diagram (hex code or color name)
+            format (str): Output format (svg, png, or pdf)
             
         Returns:
-            ImageContent: The generated diagram as a base64-encoded PNG image
+            ImageContent: The generated diagram as a base64-encoded image
             
         Raises:
             ValueError: If the Mermaid CLI (mmdc) is not installed
             ValueError: If the Mermaid syntax is invalid
+            ValueError: If an invalid theme or format is specified
             RuntimeError: If used with non-SSE transport
         """
         try:
@@ -181,9 +192,10 @@ Best suited for scenarios where:
                 output_path = await render_mermaid_to_file(
                     code=code,
                     output_dir=temp_dir,
-                    name="temp",
+                    name=f"temp.{format if format else 'png'}", # Use format in temp filename
                     theme=theme,
-                    background_color=backgroundColor
+                    background_color=backgroundColor,
+                    format=format
                 )
                 
                 # Read the generated image
@@ -193,10 +205,18 @@ Best suited for scenarios where:
                 # Convert to base64
                 image_b64 = base64.b64encode(image_bytes).decode()
                 
+                # Determine MIME type based on format
+                format_mime = {
+                    "svg": "image/svg+xml",
+                    "png": "image/png",
+                    "pdf": "application/pdf"
+                }
+                mime_type = format_mime.get(format.lower() if format else "png", "image/png")
+                
                 return types.ImageContent(
                     type="image",
                     data=image_b64,
-                    mimeType="image/png"
+                    mimeType=mime_type
                 )
         except Exception as e:
             logger.error(f"Error generating Mermaid diagram: {e}")
