@@ -12,11 +12,6 @@ authors = [
 ]
 license = {text = "MIT"}
 requires-python = ">=3.11,<3.13"
-
-[project.urls]
-"Homepage" = "https://github.com/codingthefuturewithai/mcp_mermaid_image_gen"
-"Repository" = "https://github.com/codingthefuturewithai/mcp_mermaid_image_gen"
-
 dependencies = [
     "mcp>=1.0.0",
     "mcp[cli]>=1.0.0",
@@ -24,6 +19,10 @@ dependencies = [
     "starlette>=0.36.0",
     "uvicorn>=0.27.0",
 ]
+
+[project.urls]
+"Homepage" = "https://github.com/codingthefuturewithai/mcp_mermaid_image_gen"
+"Repository" = "https://github.com/codingthefuturewithai/mcp_mermaid_image_gen"
 
 [project.optional-dependencies]
 dev = [
